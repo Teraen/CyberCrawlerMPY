@@ -2,7 +2,17 @@
 CyberCrawler robot master control
 Initialize all hardware and modules, drive main loop updates
 """
+import math
 from hardware.pca9685 import PCA9685
+from hardware.servo import ServoController
+
+# IDLE wave: adjacent legs rotate toward the lifted leg and extend for support
+_LEAN_MAP = {
+    'FR': {'BR': {'rot': 30, 'lift': -45}, 'FL': {'rot': -30, 'lift': -45}},
+    'BR': {'FR': {'rot': -30, 'lift': -45}, 'BL': {'rot': 30, 'lift': -45}},
+    'BL': {'BR': {'rot': -30, 'lift': -45}, 'FL': {'rot': 30, 'lift': -45}},
+    'FL': {'FR': {'rot': 30, 'lift': -45}, 'BL': {'rot': -30, 'lift': -45}},
+}
 from hardware.servo import ServoController
 from hardware.imu import IMU
 from ctrlcore.gait import GaitController
@@ -67,6 +77,12 @@ class Robot:
         self._lights = LightController()
         self._lights_on = True
         self._btn_last = 1
+        self._idle_wave_leg = None   # Currently waving leg (None = idle)
+        self._idle_wave_timer = 0.0  # Wave animation timer
+        self._idle_wave_last_output = None  # Last wave pose (on release → smooth return)
+        self._idle_wave_entry_t = 0.0  # Wave entry transition remaining time
+        self._idle_return_t = 0.0    # Return-to-idle transition timer
+        self._idle_return_pose = None  # Starting pose for return transition
         # Mode transition state
         self._trans_active = False
         self._trans_target = 0
@@ -264,8 +280,129 @@ class Robot:
         elif self.mode == self.MODE_CRAWL:
             output = self.crawl_mode.update(commands, dt)
         else:
-            # IDLE: hold position after transition ends, no servo output (eliminate continuous write jitter)
-            output = None
+            l2 = commands.get('L2', 0)
+            l3 = commands.get('L3', 0)
+            r1 = commands.get('R1', 0)
+            r2 = commands.get('R2', 0)
+            r3 = commands.get('R3', 0)
+            wave_active = False
+
+            # --- R2/R3 right stick → body tilt gesture (smooth directional) ---
+            if abs(r2) > 20 or abs(r3) > 20:
+                wave_active = True
+                mag = math.sqrt(r2 * r2 + r3 * r3)
+                scale = min(1.0, (mag - 20.0) / 80.0)
+
+                # Tilt direction vector: (r2, -r3) where r3 negative = forward
+                nx = r2 / mag
+                ny = -r3 / mag
+
+                # Each leg's corner direction, dot product gives smooth offset
+                _CORNERS = {'FR': (1, -1), 'FL': (-1, -1),
+                            'BR': (1, 1),  'BL': (-1, 1)}
+                lift_off = {}
+                for leg, (cx, cy) in _CORNERS.items():
+                    val = -scale * 30.0 * (nx * cx + ny * cy)
+                    lift_off[leg] = max(-30, min(30, int(val)))
+
+                if self._idle_wave_leg != 'R_STICK':
+                    self._idle_wave_leg = 'R_STICK'
+                    self._idle_wave_timer = 0.0
+                    self._idle_wave_entry_t = 0.2
+
+                output = {leg: {
+                    'rot': NEUTRAL['rotation'],
+                    'lift': IDLE_LIFT_BASE + lift_off[leg],
+                    'wheel': 0,
+                } for leg in LEG_ORDER}
+                self._idle_wave_last_output = output
+
+            # --- L2/L3 left stick → wave gesture ---
+            elif abs(l2) > 20 or abs(l3) > 20:
+                wave_active = True
+                new_wave = self._idle_wave_leg
+
+                if l3 < -20 and l2 > 20:
+                    new_wave = 'BR'
+                elif l3 < -20 and l2 < -20:
+                    new_wave = 'BL'
+                elif l3 > 20 and l2 > 20:
+                    new_wave = 'FR'
+                elif l3 > 20 and l2 < -20:
+                    new_wave = 'FL'
+
+                if new_wave != self._idle_wave_leg:
+                    # Save current pose for smooth transition between legs
+                    if self._idle_wave_last_output:
+                        self._idle_return_pose = self._idle_wave_last_output
+                    self._idle_wave_leg = new_wave
+                    self._idle_wave_timer = 0.0
+                    self._idle_wave_entry_t = 0.2
+
+                self._idle_wave_timer += dt
+                freq = 2.5
+                phase = 2.0 * math.pi * self._idle_wave_timer * freq
+                wave_rot = 30.0 * math.cos(phase)
+                wave_lift = 30.0 * math.sin(phase)
+                lean = _LEAN_MAP.get(self._idle_wave_leg, {})
+                _DIAG = {'FR': 'BL', 'BR': 'FL', 'BL': 'FR', 'FL': 'BR'}
+                diag_leg = _DIAG.get(self._idle_wave_leg)
+
+                output = {leg: {
+                    'rot': NEUTRAL['rotation'] + (
+                        wave_rot if leg == self._idle_wave_leg else
+                        lean.get(leg, {}).get('rot', 0.0)
+                    ),
+                    'lift': (
+                        NEUTRAL['lift'] + 40 + wave_lift  if leg == self._idle_wave_leg else
+                        NEUTRAL['lift'] + 45              if leg == diag_leg else
+                        NEUTRAL['lift'] + lean.get(leg, {}).get('lift', 0)
+                        if leg in lean else
+                        IDLE_LIFT_BASE
+                    ),
+                    'wheel': 0,
+                } for leg in LEG_ORDER}
+                self._idle_wave_last_output = output
+
+            # --- Entry transition for both gestures ---
+            if wave_active and self._idle_wave_entry_t > 0:
+                self._idle_wave_entry_t = max(0.0, self._idle_wave_entry_t - dt)
+                t = 1.0 - self._idle_wave_entry_t / 0.2
+                from_pose = self._idle_return_pose
+                self._idle_return_pose = None  # One-shot
+                output = {leg: {
+                    'rot': int((from_pose[leg]['rot'] if from_pose else NEUTRAL['rotation']) +
+                               (output[leg]['rot'] - (from_pose[leg]['rot'] if from_pose else NEUTRAL['rotation'])) * t),
+                    'lift': int((from_pose[leg]['lift'] if from_pose else IDLE_LIFT_BASE) +
+                                (output[leg]['lift'] - (from_pose[leg]['lift'] if from_pose else IDLE_LIFT_BASE)) * t),
+                    'wheel': 0,
+                } for leg in LEG_ORDER}
+
+            # --- No gesture: smooth return to idle ---
+            if not wave_active:
+                if self._idle_wave_last_output:
+                    self._idle_return_pose = self._idle_wave_last_output
+                    self._idle_return_t = 0.2
+                self._idle_wave_leg = None
+                self._idle_wave_timer = 0.0
+                self._idle_wave_last_output = None
+
+                if self._idle_return_t > 0 and self._idle_return_pose:
+                    self._idle_return_t = max(0.0, self._idle_return_t - dt)
+                    t = 1.0 - self._idle_return_t / 0.2
+                    output = {leg: {
+                        'rot': int(self._idle_return_pose[leg]['rot'] +
+                                   (NEUTRAL['rotation'] - self._idle_return_pose[leg]['rot']) * t),
+                        'lift': int(self._idle_return_pose[leg]['lift'] +
+                                    (IDLE_LIFT_BASE - self._idle_return_pose[leg]['lift']) * t),
+                        'wheel': 0,
+                    } for leg in LEG_ORDER}
+                else:
+                    output = {leg: {
+                        'rot': NEUTRAL['rotation'],
+                        'lift': IDLE_LIFT_BASE,
+                        'wheel': 0,
+                    } for leg in LEG_ORDER}
 
         # Lights: K1 short press toggle
         k1 = commands.get('K1', 1)
