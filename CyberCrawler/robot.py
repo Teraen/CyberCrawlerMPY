@@ -25,7 +25,7 @@ from modes.vehicle import VehicleMode
 from modes.crawl import CrawlMode
 from calibration import (
     PWM_FREQ, LEG_CHANNELS, LEG_ORDER, LEG_DIR,
-    NEUTRAL, LIMITS, TRIM, WHEEL, VEHICLE_ROT_TRIM,
+    NEUTRAL, LIMITS, TRIM, WHEEL, WHEEL_TRIM, VEHICLE_ROT_TRIM,
     IDLE_LIFT_BASE,
 )
 from hardware.led import LightController
@@ -451,7 +451,7 @@ class Robot:
                 self.servos.disable(ch['wheel'])
             else:
                 wheel = state.get('wheel', 0) * leg_dir['wheel']
-                self.servos.set_wheel_speed(ch['wheel'], wheel, WHEEL.get('trim', 0))
+                self.servos.set_wheel_speed(ch['wheel'], wheel, WHEEL_TRIM.get(leg, 0))
 
     def emergency_stop(self):
         """Emergency stop: disable all servo outputs"""

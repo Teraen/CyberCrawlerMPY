@@ -7,10 +7,10 @@ Adjust parameters based on actual measurements after mechanical testing
 # ===== Per-servo trim offsets =====
 # Individual compensation per servo (angle offset), calibrate leg-by-leg after assembly
 TRIM = {
-    'FR': {'rot': 0, 'lift': 0},   # Front Right
-    'BR': {'rot': 0, 'lift': 0},   # Back Right
-    'BL': {'rot': 0, 'lift': 0},   # Back Left
-    'FL': {'rot': 0, 'lift': 0},   # Front Left
+    'FR': {'rot': -3, 'lift': 0},   # Front Right
+    'BR': {'rot': 3, 'lift': 0},   # Back Right
+    'BL': {'rot': -9, 'lift': 0},   # Back Left
+    'FL': {'rot': 6, 'lift': 0},   # Front Left
 }
 
 # ===== Servo neutral positions =====
@@ -31,10 +31,10 @@ LIMITS = {
 # ===== Vehicle mode rotation trim =====
 # Recommended adjustment range ±15 per change to prevent exceeding motion limits
 VEHICLE_ROT_TRIM = {
-    'FR': 10,   # Front Right
+    'FR': 15,   # Front Right
     'BR': 10,   # Back Right
-    'BL': 10,   # Back Left
-    'FL': 10,   # Front Left
+    'BL': 15,   # Back Left
+    'FL': 12,   # Front Left
 }
 
 # ===== Vehicle mode attitude stabilization PID parameters =====
@@ -49,8 +49,14 @@ SUSPENSION = {
 # ===== 360° wheel servos =====
 WHEEL = {
     'neutral_duty': 307,      # Stop (1500µs)
-    'duty_range': 205,  
-    'trim': 59,   # Center offset compensation
+    'duty_range': 205,
+}
+# Per-leg wheel trim (duty offset for calibrating each wheel's neutral position)
+WHEEL_TRIM = {
+    'FR': 59,   # Front Right
+    'BR': 59,   # Back Right
+    'BL': 59,   # Back Left
+    'FL': 59,   # Front Left
 }
 
 # ===== Gait parameters =====
@@ -147,8 +153,8 @@ SERVO_DUTY_MAX = 510   # Corresponds to ~2.5ms pulse (180°)
 
 # ===== IMU axis mapping =====
 IMU_AXIS_MAP = {
-    'gyro_sign': (1, 1, 1),     # (gx, gy, gz) sign
-    'accel_sign': (1, 1, 1),    # (ax, ay, az) sign
+    'gyro_sign': (1, -1, -1),     # (gx, gy, gz) sign
+    'accel_sign': (1, -1, -1),    # (ax, ay, az) sign
 }
 
 # ===== Locomotion mixer parameters =====
@@ -167,6 +173,7 @@ POSE_MIXER = {
     'turn_body_pitch': 0,      # Body pitch compensation during turns (degrees), 0=disabled
     'height_offset': 0,       # Body height offset (degrees), 0=disabled
 }
+
 
 
 

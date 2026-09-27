@@ -54,7 +54,7 @@ class VehicleMode:
         left_speed = max(-100, min(100, left_speed)) / 100.0
         right_speed = max(-100, min(100, right_speed)) / 100.0
 
-        # Active suspension (skip if IMU not ready)
+        # Active suspension (skip during jump phases 1-3)
         pitch_corr = 0.0
         roll_corr = 0.0
         if suspension_on and self.robot.imu is not None:
@@ -64,6 +64,17 @@ class VehicleMode:
                 pitch_corr, roll_corr = self.robot.suspension.compute(pitch, roll, dt)
             except Exception:
                 pass
+
+        r1 = commands.get('R1', 0)
+
+        # --- R1: stand (forward, max 60°) / squat (backward, max 50°) ---
+        if abs(r1) > 50:
+            if r1 > 50:
+                lift_override = 90 - int(60.0 * r1 / 100.0)
+            else:
+                lift_override = 90 + int(50.0 * abs(r1) / 100.0)
+        else:
+            lift_override = None  # Normal suspension
 
         # Build output
         output = {}
@@ -84,9 +95,15 @@ class VehicleMode:
                 base_rot = _VEHICLE_ROT_BASE[leg] - trim
             # Overlay left stick live steering offset, front legs inverted (Ackermann geometry)
             rot = base_rot + (-rot_offset if is_front else rot_offset)
+            # Jump override: all legs synchronous
+            if lift_override is not None:
+                lift_out = lift_override
+            else:
+                lift_out = 90 + lift_susp
+
             output[leg] = {
                 'rot': rot,                                   # Mixed steering offset
-                'lift': 90 + lift_susp,                       # Suspension compensation
+                'lift': lift_out,                             # Suspension compensation
                 'wheel': wheel_speed,                         # Differential drive
             }
 
